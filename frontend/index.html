@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NyayaAI — Indian Legal Intelligence</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,300;0,400;0,600;1,300;1,400&family=JetBrains+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #0a0a0f;
+            --bg2: #111118;
+            --bg3: #1a1a24;
+            --border: rgba(255, 255, 255, 0.07);
+            --border2: rgba(255, 255, 255, 0.12);
+            --text: #e8e6e0;
+            --text2: #9a9890;
+            --text3: #5a5855;
+            --accent: #c4a35a;
+            --accent2: #8b6b2e;
+            --accent-glow: rgba(196, 163, 90, 0.15);
+            --red: #e05a4b;
+            --green: #4caf7d;
+            --blue: #5a8fc4;
+            --sidebar-w: 260px;
+        }
+
+        html,
+        body {
+            height: 100%;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Instrument Sans', sans-serif;
+            font-size: 15px;
+            overflow: hidden;
+        }
+
+        /* ── LAYOUT ── */
+        .app {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* ── SIDEBAR ── */
+        .sidebar {
+            width: var(--sidebar-w);
+            background: var(--bg2);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+        }
+
+        .logo {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 32px;
+            height: 32px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .logo-text {
+            font-family: 'Crimson Pro', serif;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--text);
+        }
+
+        .logo-text span {
+            color: var(--accent);
+        }
+
+        .new-chat-btn {
+            margin: 12px;
+            padding: 10px 14px;
+            background: transparent;
+            border: 1px solid var(--border2);
+            border-radius: 8px;
+            color: var(--text2);
+            font-family: 'Instrument Sans', sans-serif;
+            font-size: 13px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+        }
+
+        .new-chat-btn:hover {
+            background: var(--bg3);
+            color: var(--text);
+            border-color: var(--border2);
+        }
+
+        .new-chat-btn svg {
+            opacity: 0.6;
+        }
+
+        .sidebar-section {
+            padding: 8px 12px 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: var(--text3);
+        }
+
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 8px;
+        }
+
+        .chat-list::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .chat-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-list::-webkit-scrollbar-thumb {
+            background: var(--border2);
+            border-radius: 2px;
+        }
+
+        .chat-item {
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text2);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.15s;
+            margin-bottom: 1px;
+        }
+
+        .chat-item:hover {
+            background: var(--bg3);
+            color: var(--text);
+        }
+
+        .chat-item.active {
+            background: var(--bg3);
+            color: var(--text);
+        }
+
+        .sidebar-footer {
+            padding: 12px;
+            border-top: 1px solid var(--border);
+        }
+
+        .filter-row {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .filter-chip {
+            padding: 4px 10px;
+            border-radius: 20px;
+            border: 1px solid var(--border2);
+            background: transparent;
+            color: var(--text3);
+            font-size: 11px;
+            cursor: pointer;
+            font-family: 'Instrument Sans', sans-serif;
+            transition: all 0.15s;
+        }
+
+        .filter-chip:hover,
+        .filter-chip.active {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-glow);
+        }
+
+        .filter-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--text3);
+            margin-bottom: 6px;
+        }
+
+        /* ── MAIN CHAT AREA ── */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            background: var(--bg);
+        }
+
+        /* ── TOP BAR ── */
+        .topbar {
+            height: 52px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            gap: 12px;
+            background: var(--bg);
+        }
+
+        .topbar-title {
+            font-family: 'Crimson Pro', serif;
+            font-size: 16px;
+            color: var(--text2);
+            font-style: italic;
+        }
+
+        .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 6px var(--green);
+            margin-left: auto;
+        }
+
+        .vector-count {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            color: var(--text3);
+        }
+
+        /* ── MESSAGES ── */
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px 0;
+            scroll-behavior: smooth;
+        }
+
+        .messages::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .messages::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .messages::-webkit-scrollbar-thumb {
+            background: var(--border2);
+            border-radius: 2px;
+        }
+
+        /* ── WELCOME SCREEN ── */
+        .welcome {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            padding: 40px;
+            text-align: center;
+            gap: 16px;
+        }
+
+        .welcome-icon {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            margin-bottom: 8px;
+            box-shadow: 0 0 40px var(--accent-glow);
+        }
+
+        .welcome h1 {
+            font-family: 'Crimson Pro', serif;
+            font-size: 32px;
+            font-weight: 300;
+            color: var(--text);
+            line-height: 1.2;
+        }
+
+        .welcome h1 em {
+            color: var(--accent);
+            font-style: italic;
+        }
+
+        .welcome p {
+            color: var(--text2);
+            font-size: 14px;
+            max-width: 420px;
+            line-height: 1.6;
+        }
+
+        .suggestion-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+            width: 100%;
+            max-width: 520px;
+        }
+
+        .suggestion-card {
+            padding: 14px 16px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: left;
+            transition: all 0.2s;
+        }
+
+        .suggestion-card:hover {
+            border-color: var(--accent);
+            background: var(--bg3);
+            transform: translateY(-1px);
+        }
+
+        .suggestion-card .card-icon {
+            font-size: 18px;
+            margin-bottom: 6px;
+        }
+
+        .suggestion-card .card-title {
+            font-size: 13px;
+            color: var(--text);
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+
+        .suggestion-card .card-desc {
+            font-size: 11px;
+            color: var(--text3);
+            line-height: 1.4;
+        }
+
+        /* ── MESSAGE BUBBLES ── */
+        .message {
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 0 24px 20px;
+            animation: fadeUp 0.3s ease;
+        }
+
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user .msg-row {
+            display: flex;
+            justify-content: flex-end;
+        }
+
+        .message.user .bubble {
+            background: var(--bg3);
+            border: 1px solid var(--border2);
+            border-radius: 16px 16px 4px 16px;
+            padding: 12px 16px;
+            max-width: 75%;
+            font-size: 14px;
+            line-height: 1.6;
+            color: var(--text);
+        }
+
+        .message.assistant .msg-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .assistant-avatar {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+
+        .assistant-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .message.assistant .content {
+            font-size: 14px;
+            line-height: 1.75;
+            color: var(--text);
+            padding-left: 36px;
+        }
+
+        .content h1,
+        .content h2,
+        .content h3 {
+            font-family: 'Crimson Pro', serif;
+            color: var(--text);
+            margin: 16px 0 8px;
+            font-weight: 600;
+        }
+
+        .content h1 {
+            font-size: 20px;
+        }
+
+        .content h2 {
+            font-size: 17px;
+        }
+
+        .content h3 {
+            font-size: 15px;
+            color: var(--accent);
+        }
+
+        .content p {
+            margin-bottom: 10px;
+        }
+
+        .content strong {
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        .content ul,
+        .content ol {
+            padding-left: 20px;
+            margin-bottom: 10px;
+        }
+
+        .content li {
+            margin-bottom: 4px;
+        }
+
+        .content code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+            background: var(--bg3);
+            padding: 2px 6px;
+            border-radius: 4px;
+            color: var(--accent);
+        }
+
+        /* ── SOURCES ── */
+        .sources-toggle {
+            margin-top: 12px;
+            margin-left: 36px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            cursor: pointer;
+            color: var(--text3);
+            font-size: 12px;
+            border: none;
+            background: none;
+            font-family: 'Instrument Sans', sans-serif;
+            transition: color 0.2s;
+        }
+
+        .sources-toggle:hover {
+            color: var(--accent);
+        }
+
+        .sources-toggle svg {
+            transition: transform 0.2s;
+        }
+
+        .sources-toggle.open svg {
+            transform: rotate(90deg);
+        }
+
+        .sources-list {
+            margin-top: 8px;
+            margin-left: 36px;
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .sources-list.open {
+            display: flex;
+        }
+
+        .source-item {
+            padding: 10px 12px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            border-left: 3px solid var(--accent2);
+        }
+
+        .source-title {
+            font-size: 12px;
+            color: var(--text);
+            font-weight: 500;
+            margin-bottom: 3px;
+        }
+
+        .source-snippet {
+            font-size: 11px;
+            color: var(--text3);
+            line-height: 1.5;
+            font-family: 'Crimson Pro', serif;
+            font-style: italic;
+        }
+
+        .source-meta {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+            align-items: center;
+        }
+
+        .source-badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .source-badge.judgment {
+            background: rgba(90, 143, 196, 0.15);
+            color: var(--blue);
+        }
+
+        .source-badge.act {
+            background: rgba(76, 175, 125, 0.15);
+            color: var(--green);
+        }
+
+        .source-badge.cad {
+            background: rgba(196, 163, 90, 0.15);
+            color: var(--accent);
+        }
+
+        .source-score {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: var(--text3);
+            margin-left: auto;
+        }
+
+        /* ── THINKING INDICATOR ── */
+        .thinking {
+            max-width: 780px;
+            margin: 0 auto;
+            padding: 0 24px 20px;
+        }
+
+        .thinking-inner {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-left: 36px;
+        }
+
+        .thinking-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .thinking-dots span {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            animation: bounce 1.2s infinite;
+        }
+
+        .thinking-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .thinking-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            60%,
+            100% {
+                transform: translateY(0);
+                opacity: 0.4;
+            }
+
+            30% {
+                transform: translateY(-6px);
+                opacity: 1;
+            }
+        }
+
+        .thinking-text {
+            font-size: 12px;
+            color: var(--text3);
+            font-style: italic;
+            font-family: 'Crimson Pro', serif;
+        }
+
+        /* ── INPUT AREA ── */
+        .input-area {
+            border-top: 1px solid var(--border);
+            padding: 16px 20px;
+            background: var(--bg);
+        }
+
+        .input-wrap {
+            max-width: 780px;
+            margin: 0 auto;
+            background: var(--bg2);
+            border: 1px solid var(--border2);
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            transition: border-color 0.2s;
+        }
+
+        .input-wrap:focus-within {
+            border-color: var(--accent2);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        textarea {
+            width: 100%;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: var(--text);
+            font-family: 'Instrument Sans', sans-serif;
+            font-size: 14px;
+            line-height: 1.6;
+            padding: 14px 16px 8px;
+            resize: none;
+            min-height: 52px;
+            max-height: 180px;
+        }
+
+        textarea::placeholder {
+            color: var(--text3);
+        }
+
+        .input-footer {
+            display: flex;
+            align-items: center;
+            padding: 6px 10px 10px;
+            gap: 8px;
+        }
+
+        .send-btn {
+            margin-left: auto;
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            border: none;
+            background: var(--accent);
+            color: #000;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+
+        .send-btn:hover {
+            background: #d4b36a;
+            transform: scale(1.05);
+        }
+
+        .send-btn:disabled {
+            background: var(--bg3);
+            color: var(--text3);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .input-hint {
+            font-size: 11px;
+            color: var(--text3);
+            text-align: center;
+            margin-top: 8px;
+            max-width: 780px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* ── ERROR ── */
+        .error-msg {
+            padding: 10px 14px;
+            background: rgba(224, 90, 75, 0.1);
+            border: 1px solid rgba(224, 90, 75, 0.3);
+            border-radius: 8px;
+            color: var(--red);
+            font-size: 13px;
+            margin-left: 36px;
+        }
+
+        /* scrollbar */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: var(--border2) transparent;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app">
+
+        <aside class="sidebar">
+            <div class="logo">
+                <div class="logo-icon">⚖</div>
+                <div class="logo-text">Nyaya<span>AI</span></div>
+            </div>
+
+            <button class="new-chat-btn" onclick="newChat()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                New conversation
+            </button>
+
+            <div class="sidebar-section">Recent</div>
+            <div class="chat-list" id="chatList"></div>
+
+            <div class="sidebar-footer">
+                <div class="filter-label">Filter by source</div>
+                <div class="filter-row">
+                    <button class="filter-chip active" data-filter="" onclick="setFilter(this, '')">All</button>
+                    <button class="filter-chip" data-filter="judgment"
+                        onclick="setFilter(this, 'judgment')">Judgments</button>
+                    <button class="filter-chip" data-filter="act" onclick="setFilter(this, 'act')">Acts</button>
+                    <button class="filter-chip" data-filter="cad" onclick="setFilter(this, 'cad')">CAD</button>
+                </div>
+            </div>
+        </aside>
+
+        <main class="main">
+
+            <div class="topbar">
+                <div class="topbar-title">Indian Legal Intelligence</div>
+                <span class="vector-count" id="vectorCount">—</span>
+                <div class="status-dot" id="statusDot" style="background:var(--text3);box-shadow:none"></div>
+            </div>
+
+            <div class="messages" id="messages">
+                <div class="welcome" id="welcome">
+                    <div class="welcome-icon">⚖</div>
+                    <h1>Ask anything about<br><em>Indian Law</em></h1>
+                    <p>Powered by Supreme Court judgments, Constitutional Articles, Acts of Parliament, and Constituent
+                        Assembly Debates.</p>
+
+                    <div class="suggestion-grid">
+                        <div class="suggestion-card"
+                            onclick="useSuggestion('What does Article 21 say about right to life and personal liberty?')">
+                            <div class="card-icon">📜</div>
+                            <div class="card-title">Article 21 — Right to Life</div>
+                            <div class="card-desc">Constitutional provisions and landmark SC interpretations</div>
+                        </div>
+                        <div class="suggestion-card"
+                            onclick="useSuggestion('What is the basic structure doctrine of the Indian Constitution?')">
+                            <div class="card-icon">🏛️</div>
+                            <div class="card-title">Basic Structure Doctrine</div>
+                            <div class="card-desc">Kesavananda Bharati and its constitutional significance</div>
+                        </div>
+                        <div class="suggestion-card"
+                            onclick="useSuggestion('What are the reasonable restrictions on freedom of speech under Article 19?')">
+                            <div class="card-icon">🗣️</div>
+                            <div class="card-title">Freedom of Speech</div>
+                            <div class="card-desc">Article 19 rights and permissible restrictions</div>
+                        </div>
+                        <div class="suggestion-card"
+                            onclick="useSuggestion('What did the framers intend by equality under Article 14?')">
+                            <div class="card-icon">⚡</div>
+                            <div class="card-title">Framer Intent — Equality</div>
+                            <div class="card-desc">CAD debates on Article 14 and equal protection</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <div class="input-wrap">
+                    <textarea id="queryInput"
+                        placeholder="Ask about Indian law, constitutional rights, court judgments..." rows="1"
+                        onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+                    <div class="input-footer">
+
+                        <button class="send-btn" id="sendBtn" onclick="sendQuery()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5">
+                                <line x1="22" y1="2" x2="11" y2="13" />
+                                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="input-hint">NyayaAI provides legal information, not legal advice. Always consult a qualified
+                    lawyer for personal legal matters.</div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        // FIXED CORS URL
+        const API = 'http://127.0.0.1:8000';
+        let activeFilter = '';
+        let chatHistory = [];
+        let isLoading = false;
+
+        // ── HEALTH CHECK ──────────────────────────────────────
+        async function checkHealth() {
+            try {
+                const r = await fetch(`${API}/health`);
+                const d = await r.json();
+                if (d.status === 'ok') {
+                    document.getElementById('statusDot').style.background = 'var(--green)';
+                    document.getElementById('statusDot').style.boxShadow = '0 0 6px var(--green)';
+                    document.getElementById('vectorCount').textContent = `${d.vectors.toLocaleString()} vectors`;
+                }
+            } catch {
+                document.getElementById('statusDot').style.background = 'var(--red)';
+            }
+        }
+        checkHealth();
+
+        // ── FILTER ────────────────────────────────────────────
+        function setFilter(btn, filter) {
+            document.querySelectorAll('.filter-chip').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            activeFilter = filter;
+        }
+
+        // ── SUGGESTIONS ───────────────────────────────────────
+        function useSuggestion(text) {
+            document.getElementById('queryInput').value = text;
+            autoResize(document.getElementById('queryInput'));
+            sendQuery();
+        }
+
+        // ── NEW CHAT ──────────────────────────────────────────
+        function newChat() {
+            chatHistory = [];
+            const msgs = document.getElementById('messages');
+            msgs.innerHTML = `
+    <div class="welcome" id="welcome">
+      <div class="welcome-icon">⚖</div>
+      <h1>Ask anything about<br><em>Indian Law</em></h1>
+      <p>Powered by Supreme Court judgments, Constitutional Articles, Acts of Parliament, and Constituent Assembly Debates.</p>
+      <div class="suggestion-grid">
+        <div class="suggestion-card" onclick="useSuggestion('What does Article 21 say about right to life and personal liberty?')">
+          <div class="card-icon">📜</div>
+          <div class="card-title">Article 21 — Right to Life</div>
+          <div class="card-desc">Constitutional provisions and landmark SC interpretations</div>
+        </div>
+        <div class="suggestion-card" onclick="useSuggestion('What is the basic structure doctrine of the Indian Constitution?')">
+          <div class="card-icon">🏛️</div>
+          <div class="card-title">Basic Structure Doctrine</div>
+          <div class="card-desc">Kesavananda Bharati and its constitutional significance</div>
+        </div>
+        <div class="suggestion-card" onclick="useSuggestion('What are the reasonable restrictions on freedom of speech under Article 19?')">
+          <div class="card-icon">🗣️</div>
+          <div class="card-title">Freedom of Speech</div>
+          <div class="card-desc">Article 19 rights and permissible restrictions</div>
+        </div>
+        <div class="suggestion-card" onclick="useSuggestion('What did the framers intend by equality under Article 14?')">
+          <div class="card-icon">⚡</div>
+          <div class="card-title">Framer Intent — Equality</div>
+          <div class="card-desc">CAD debates on Article 14 and equal protection</div>
+        </div>
+      </div>
+    </div>`;
+        }
+
+        // ── SEND QUERY (CLEANED UP) ───────────────────────────
+        async function sendQuery() {
+            const input = document.getElementById('queryInput');
+            const query = input.value.trim();
+            if (!query || isLoading) return;
+
+            // Hide welcome
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.remove();
+
+            // Add user message
+            appendMessage('user', query);
+            chatHistory.push({ role: 'user', content: query });
+
+            input.value = '';
+            autoResize(input);
+            setLoading(true);
+
+            // Show thinking
+            const thinkingId = showThinking();
+
+            try {
+                // FIXED SINGLE FETCH CALL WITH HARDCODED MODEL
+                const res = await fetch(`${API}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(Object.assign(
+                        {
+                            query: query,
+                            model: "anthropic/claude-sonnet-4-5"
+                        },
+                        activeFilter ? { doc_type: activeFilter } : {}
+                    ))
+                });
+
+                removeThinking(thinkingId);
+
+                if (!res.ok) {
+                    const err = await res.text();
+                    appendError(`API Error ${res.status}: ${err}`);
+                    return;
+                }
+
+                const data = await res.json();
+                chatHistory.push({ role: 'assistant', content: data.answer });
+
+                appendAssistantMessage(data);
+                addToSidebar(query);
+
+            } catch (e) {
+                removeThinking(thinkingId);
+                appendError(`Connection error: ${e.message}. Is the API running?`);
+            } finally {
+                setLoading(false);
+            }
+        }
+        // ── UI HELPERS ────────────────────────────────────────
+        function setLoading(v) {
+            isLoading = v;
+            document.getElementById('sendBtn').disabled = v;
+        }
+
+        function showThinking() {
+            const id = 'thinking-' + Date.now();
+            const msgs = document.getElementById('messages');
+            const el = document.createElement('div');
+            el.className = 'thinking';
+            el.id = id;
+            el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;padding-left:0">
+      <div class="assistant-avatar">⚖</div>
+      <span class="assistant-label">NyayaAI</span>
+    </div>
+    <div class="thinking-inner">
+      <div class="thinking-dots">
+        <span></span><span></span><span></span>
+      </div>
+      <span class="thinking-text">Searching legal corpus...</span>
+    </div>`;
+            msgs.appendChild(el);
+            msgs.scrollTop = msgs.scrollHeight;
+            return id;
+        }
+
+        function removeThinking(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        function appendMessage(role, text) {
+            const msgs = document.getElementById('messages');
+            const el = document.createElement('div');
+            el.className = `message ${role}`;
+            el.innerHTML = `<div class="msg-row"><div class="bubble">${escapeHtml(text)}</div></div>`;
+            msgs.appendChild(el);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function appendAssistantMessage(data) {
+            const msgs = document.getElementById('messages');
+            const el = document.createElement('div');
+            el.className = 'message assistant';
+
+            const sourceId = 'src-' + Date.now();
+            const sourcesHtml = data.sources.map(s => `
+    <div class="source-item">
+      <div class="source-title">${escapeHtml(s.title)}</div>
+      <div class="source-snippet">"${escapeHtml(s.text_snippet)}"</div>
+      <div class="source-meta">
+        <span class="source-badge ${s.doc_type}">${s.doc_type}</span>
+        <span class="source-score">${s.score.toFixed(3)}</span>
+      </div>
+    </div>`).join('');
+
+            // SAFE MODEL NAME FALLBACK ADDED HERE
+            const modelName = data.model_used ? (data.model_used.includes('/') ? data.model_used.split('/')[1] : data.model_used) : 'AI';
+
+            el.innerHTML = `
+    <div class="msg-header">
+      <div class="assistant-avatar">⚖</div>
+      <span class="assistant-label">NyayaAI</span>
+      <span style="font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace;margin-left:4px">${modelName}</span>
+    </div>
+    <div class="content">${formatMarkdown(data.answer)}</div>
+    <button class="sources-toggle" onclick="toggleSources(this, '${sourceId}')">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="9 18 15 12 9 6"/>
+      </svg>
+      ${data.sources.length} sources used
+    </button>
+    <div class="sources-list" id="${sourceId}">${sourcesHtml}</div>`;
+
+            msgs.appendChild(el);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function appendError(msg) {
+            const msgs = document.getElementById('messages');
+            const el = document.createElement('div');
+            el.className = 'message assistant';
+            el.innerHTML = `
+    <div class="msg-header">
+      <div class="assistant-avatar" style="background:var(--red)">⚠</div>
+      <span class="assistant-label" style="color:var(--red)">Error</span>
+    </div>
+    <div class="error-msg">${escapeHtml(msg)}</div>`;
+            msgs.appendChild(el);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function toggleSources(btn, id) {
+            btn.classList.toggle('open');
+            document.getElementById(id).classList.toggle('open');
+        }
+
+        function addToSidebar(query) {
+            const list = document.getElementById('chatList');
+            const item = document.createElement('div');
+            item.className = 'chat-item active';
+            item.textContent = query.length > 35 ? query.slice(0, 35) + '…' : query;
+            list.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
+            list.insertBefore(item, list.firstChild);
+        }
+
+        // ── MARKDOWN FORMATTER ────────────────────────────────
+        function formatMarkdown(text) {
+            return text
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*(.+?)\*/g, '<em>$1</em>')
+                .replace(/`(.+?)`/g, '<code>$1</code>')
+                .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+                .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+                .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+                .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+                .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+                .replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`)
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/\n/g, '<br>')
+                .replace(/^(?!<[hul])/gm, '')
+                .replace(/^(.+)$/gm, m => m.startsWith('<') ? m : `<p>${m}</p>`);
+        }
+
+        function escapeHtml(t) {
+            return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // ── INPUT HELPERS ─────────────────────────────────────
+        function handleKey(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendQuery();
+            }
+        }
+
+        function autoResize(el) {
+            el.style.height = 'auto';
+            el.style.height = Math.min(el.scrollHeight, 180) + 'px';
+        }
+    </script>
+</body>
+
+</html>

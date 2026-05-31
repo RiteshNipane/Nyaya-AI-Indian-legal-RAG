@@ -1,0 +1,44 @@
+# Environment variables - NEVER commit this
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Data files - too large for github
+data/raw/
+data/cleaned/
+
+# Qdrant storage
+qdrant_storage/
+
+# Embeddings progress
+embeddings/ingest_progress.json
+
+# VS Code
+.vscode/
+
+# Model cache
+.cache/
+*.bin
+*.pt
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
