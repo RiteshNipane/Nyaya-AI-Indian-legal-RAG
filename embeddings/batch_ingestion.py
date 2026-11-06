@@ -16,7 +16,8 @@ from dotenv import load_dotenv
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
-    PayloadSchemaType
+    PayloadSchemaType, HnswConfigDiff,
+    ScalarQuantization, ScalarQuantizationConfig, ScalarType
 )
 from sentence_transformers import SentenceTransformer
 import torch
@@ -30,9 +31,25 @@ load_dotenv()
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None   # needed for Qdrant Cloud
 COLLECTION_NAME = "indian_legal_rag"
-VECTOR_SIZE = 384    # all-MiniLM-L6-v2 dimension
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# Prefix some models expect on passages (E5: "passage: "). Queries use
+# EMBEDDING_QUERY_PREFIX in the API; keep the two consistent.
+DOC_PREFIX = os.getenv("EMBEDDING_DOC_PREFIX", "")
+VECTOR_SIZE = 384    # placeholder; replaced by the model's real dimension after load
 BATCH_SIZE = 256     # large batches — GPU handles this easily
+
+# Scale options for 100k+ judgments (millions of chunks):
+#   QDRANT_ON_DISK=1   keep vectors + HNSW graph on disk
+#   QDRANT_QUANTIZE=1  int8 scalar quantisation (~4x less RAM, minor recall loss)
+ON_DISK = os.getenv("QDRANT_ON_DISK", "0") == "1"
+QUANTIZE = os.getenv("QDRANT_QUANTIZE", "0") == "1"
+# Non-interactive collection handling (CI / cloud): "1" recreate, "0" keep.
+RECREATE = os.getenv("INGEST_RECREATE")
+
+# Stable namespace so re-ingesting the same chunk overwrites it instead of duplicating.
+ID_NAMESPACE = uuid.UUID("6f1d3c2e-8a54-4b7e-9a31-2d6c5e0b7a11")
 CHUNK_SIZE = 600
 CHUNK_OVERLAP = 100
 
@@ -41,6 +58,7 @@ DATA_DIRS = {
     # Fixed: Pointing to cleaned folder
     "act":      os.path.join(ROOT, "data", "cleaned", "acts"),
     "cad":      os.path.join(ROOT, "data", "raw", "cad"),
+    "hc":       os.path.join(ROOT, "data", "raw", "hc_judgments"),
 }
 
 PROGRESS_FILE = os.path.join(ROOT, "embeddings", "ingest_progress.json")
@@ -68,13 +86,11 @@ DEVICE = setup_gpu()
 # ─────────────────────────────────────────────────────────
 
 print("\nLoading embedding model onto GPU...")
-model = SentenceTransformer(
-    "sentence-transformers/all-MiniLM-L6-v2",
-    device=DEVICE
-)
-print(f"✓ Model loaded on {DEVICE.upper()}")
+model = SentenceTransformer(EMBEDDING_MODEL, device=DEVICE)
+VECTOR_SIZE = model.get_sentence_embedding_dimension()
+print(f"✓ {EMBEDDING_MODEL} loaded on {DEVICE.upper()} (dim {VECTOR_SIZE})")
 
-qdrant = QdrantClient(url=QDRANT_URL)
+qdrant = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 
 # ─────────────────────────────────────────────────────────
 # TEST CONNECTIONS
@@ -112,16 +128,30 @@ def setup_collection():
     if COLLECTION_NAME in existing:
         count = qdrant.count(COLLECTION_NAME).count
         print(f"✓ Collection '{COLLECTION_NAME}' exists ({count} vectors)")
-        ans = input("  Re-create from scratch? (y/N): ").strip().lower()
+        if RECREATE is not None:
+            ans = "y" if RECREATE == "1" else "n"
+        else:
+            ans = input("  Re-create from scratch? (y/N): ").strip().lower()
         if ans != "y":
             print("  Keeping existing — will add new vectors only")
             return
         qdrant.delete_collection(COLLECTION_NAME)
         print("  Deleted existing collection")
 
+    extra = {}
+    if QUANTIZE:
+        extra["quantization_config"] = ScalarQuantization(
+            scalar=ScalarQuantizationConfig(
+                type=ScalarType.INT8, quantile=0.99, always_ram=True)
+        )
+    if ON_DISK:
+        extra["hnsw_config"] = HnswConfigDiff(on_disk=True)
+
     qdrant.create_collection(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
+        vectors_config=VectorParams(
+            size=VECTOR_SIZE, distance=Distance.COSINE, on_disk=ON_DISK),
+        **extra
     )
 
     for field, schema in [
@@ -196,8 +226,10 @@ def build_chunks_from_file(filepath: str) -> list:
 
     all_chunks = []
 
+    rel_path = os.path.relpath(filepath, ROOT).replace("\\", "/")
+
     # Loop through every document (works for 1 judgment or 500 act sections)
-    for doc in documents:
+    for doc_idx, doc in enumerate(documents):
         text = doc.get("text", "")
         doc_type = doc.get("doc_type", "unknown")
 
@@ -245,6 +277,8 @@ def build_chunks_from_file(filepath: str) -> list:
                     "source":   doc.get("source", ""),
                     "filename": os.path.basename(filepath),
                 }
+            # Stable key -> deterministic point id (popped before upload)
+            payload["_key"] = f"{rel_path}:{doc_idx}:{i}"
             all_chunks.append(payload)
 
     return all_chunks
@@ -258,10 +292,10 @@ def embed_and_upload(chunks: list, file_label: str = ""):
     if not chunks:
         return
 
-    texts = [c["text"] for c in chunks]
+    texts = [DOC_PREFIX + c["text"] for c in chunks]
     n_batches = (len(texts) + BATCH_SIZE - 1) // BATCH_SIZE
 
-    print(f"    [X-RAY] Sending data to RTX 3050 GPU...")
+    print(f"    Embedding {len(texts)} chunks on {DEVICE.upper()}...")
 
     for i in range(0, len(texts), BATCH_SIZE):
         batch_num = i // BATCH_SIZE + 1
@@ -281,8 +315,10 @@ def embed_and_upload(chunks: list, file_label: str = ""):
         )
 
         points = [
-            PointStruct(id=str(uuid.uuid4()),
-                        vector=emb.tolist(), payload=payload)
+            PointStruct(
+                id=str(uuid.uuid5(ID_NAMESPACE, payload["_key"])),
+                vector=emb.tolist(),
+                payload={k: v for k, v in payload.items() if k != "_key"})
             for emb, payload in zip(embeddings, batch_payloads)
         ]
 

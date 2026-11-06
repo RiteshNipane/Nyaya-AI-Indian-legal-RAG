@@ -1,65 +1,72 @@
 """
-commonLIT_scraper.py — with skip-if-already-downloaded logic
+commonLIT_scraper.py — Supreme Court judgments from AWS Open Data (1950–2025)
+
+Scaled for the full archive:
+  * streams each year's tar instead of loading it into memory
+  * extracts PDF text in a process pool
+  * resumes from an append-only manifest (no re-reading thousands of JSON files)
+  * `max_judgments=None` means "everything in the year"
+
+Usage
+-----
+    python ingestion/scraper/commonLIT_scraper.py --years 2018-2024 --max-per-year 200
+    python ingestion/scraper/commonLIT_scraper.py --years 1950-2025 --workers 6   # full archive
 """
 
-import requests
+import argparse
 import json
 import os
 import time
-import tarfile
-import io
-import PyPDF2
-from tqdm import tqdm
+from typing import Optional
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-}
+import requests
+
+try:  # imported as a package module (run_all_scraper) or run directly
+    from scraper.pdf_utils import (
+        HEADERS, SeenManifest, extract_pdf_text, process_tar_stream, stable_filename)
+except ImportError:
+    from pdf_utils import (
+        HEADERS, SeenManifest, extract_pdf_text, process_tar_stream, stable_filename)
 
 S3_BASE = "https://indian-supreme-court-judgments.s3.amazonaws.com"
 
+# Kept for backwards compatibility with older imports.
+pdf_bytes_to_text = extract_pdf_text
 
-def already_downloaded(year: int, output_dir: str, max_judgments: int) -> bool:
-    """
-    Check if judgments for this year are already downloaded.
-    Returns True if we already have >= 90% of max_judgments files for this year.
-    """
+
+def _year_files(year: int, output_dir: str) -> list:
     if not os.path.exists(output_dir):
-        return False
+        return []
+    return [f for f in os.listdir(output_dir)
+            if f.startswith(f"sc_{year}_") and f.endswith(".json")]
 
-    existing = [
-        f for f in os.listdir(output_dir)
-        if f.startswith(f"sc_{year}_") and f.endswith(".json")
-    ]
-    count = len(existing)
 
-    if count >= max_judgments * 0.9:
-        print(
-            f"    ✓ Already have {count} judgments for {year} — skipping download")
+def already_downloaded(year: int, output_dir: str, max_judgments: Optional[int]) -> bool:
+    """True when we already hold >= 90% of the requested cap for this year.
+
+    With no cap (None) we never skip: the manifest makes a re-run cheap and picks up
+    judgments added by the bi-monthly dataset updates.
+    """
+    count = len(_year_files(year, output_dir))
+    if max_judgments is not None and count >= max_judgments * 0.9:
+        print(f"    ✓ Already have {count} judgments for {year} — skipping download")
         return True
-
     if count > 0:
-        print(
-            f"    Found {count} existing judgments for {year} — resuming from where left off")
-
+        print(f"    Found {count} existing judgments for {year} — resuming")
     return False
 
 
 def get_existing_filenames(year: int, output_dir: str) -> set:
-    """Return set of already-saved filenames for a year (for resume support)."""
+    """Original tar-member names of files saved by earlier runs (reads each JSON once)."""
     existing = set()
-    if not os.path.exists(output_dir):
-        return existing
-
-    for f in os.listdir(output_dir):
-        if f.startswith(f"sc_{year}_") and f.endswith(".json"):
-            try:
-                with open(os.path.join(output_dir, f), encoding="utf-8") as fp:
-                    data = json.load(fp)
-                    if "filename" in data:
-                        existing.add(data["filename"])
-            except Exception:
-                continue
-
+    for f in _year_files(year, output_dir):
+        try:
+            with open(os.path.join(output_dir, f), encoding="utf-8") as fp:
+                name = json.load(fp).get("filename")
+                if name:
+                    existing.add(name)
+        except Exception:
+            continue
     return existing
 
 
@@ -81,163 +88,89 @@ def get_metadata_index(year: int) -> dict:
         return {}
 
 
-def pdf_bytes_to_text(pdf_bytes: bytes) -> str:
-    """Extract plain text from PDF bytes."""
-    try:
-        reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
-        pages = []
-        for page in reader.pages:
-            text = page.extract_text()
-            if text and text.strip():
-                pages.append(text.strip())
-        return "\n\n".join(pages)
-    except Exception:
-        return ""
-
-
-def download_year(year: int, output_dir: str, max_judgments: int = 100) -> int:
-    """Download tar for a year, extract PDFs, save as JSON. Returns count saved."""
+def download_year(year: int, output_dir: str, max_judgments: Optional[int] = 100,
+                  workers: int = 4) -> int:
+    """Stream the year's tar, save each judgment as JSON. Returns files on disk for the year."""
     os.makedirs(output_dir, exist_ok=True)
 
-    # ── Skip check ───────────────────────────────────────────
     if already_downloaded(year, output_dir, max_judgments):
-        return len([
-            f for f in os.listdir(output_dir)
-            if f.startswith(f"sc_{year}_") and f.endswith(".json")
-        ])
+        return len(_year_files(year, output_dir))
 
-    # ── Resume: get already-saved filenames ──────────────────
-    existing_filenames = get_existing_filenames(year, output_dir)
-    existing_count = len([
-        f for f in os.listdir(output_dir)
-        if f.startswith(f"sc_{year}_") and f.endswith(".json")
-    ])
-    remaining = max_judgments - existing_count
+    manifest = SeenManifest(
+        os.path.join(output_dir, f".seen_sc_{year}.txt"),
+        bootstrap=lambda: get_existing_filenames(year, output_dir),
+    )
+    existing = len(_year_files(year, output_dir))
+    budget = None if max_judgments is None else max_judgments - existing
+    if budget is not None and budget <= 0:
+        print(f"    Already have {existing} — nothing to do")
+        return existing
 
-    if remaining <= 0:
-        print(f"    Already have {existing_count} — nothing to do")
-        return existing_count
-
-    # ── Metadata index ────────────────────────────────────────
-    print(f"    Fetching metadata index...")
+    print("    Fetching metadata index...")
     meta_lookup = get_metadata_index(year)
 
-    # ── Download tar ──────────────────────────────────────────
+    saved_now = {"n": 0}
+
+    def on_text(base_name: str, text: str) -> bool:
+        meta = meta_lookup.get(base_name, {})
+        data = {
+            "title":    meta.get("title") or meta.get("case_title") or base_name,
+            "year":     year,
+            "date":     meta.get("date") or meta.get("decision_date") or str(year),
+            "text":     text,
+            "court":    "Supreme Court of India",
+            "source":   "aws-open-data/indian-supreme-court-judgments",
+            "doc_type": "judgment",
+            "filename": base_name,
+            "metadata": meta,
+        }
+        path = os.path.join(output_dir, stable_filename(f"sc_{year}", base_name))
+        with open(path, "w", encoding="utf-8") as out:
+            json.dump(data, out, ensure_ascii=False, indent=2)
+        saved_now["n"] += 1
+        if saved_now["n"] % 100 == 0:
+            print(f"    … {saved_now['n']} saved for {year}")
+        return True
+
+    def should_stop() -> bool:
+        return budget is not None and saved_now["n"] >= budget
+
     tar_url = f"{S3_BASE}/data/tar/year={year}/english/english.tar"
-    print(f"    Downloading: {tar_url}")
+    print(f"    Streaming: {tar_url}")
+    stats = process_tar_stream(tar_url, manifest, on_text, should_stop, workers=workers)
+    print(f"    saved {stats['saved']} | skipped (no text) {stats['skipped_short']} | "
+          f"already had {stats['skipped_seen']} | errors {stats['errors']}")
 
-    try:
-        r = requests.get(tar_url, headers=HEADERS, timeout=300, stream=True)
-        if r.status_code != 200:
-            print(f"    ✗ HTTP {r.status_code}")
-            return existing_count
-
-        total_size = int(r.headers.get("content-length", 0))
-        content = b""
-        with tqdm(total=total_size, unit="B", unit_scale=True, desc=f"    {year} tar") as pbar:
-            for chunk in r.iter_content(chunk_size=65536):
-                content += chunk
-                pbar.update(len(chunk))
-
-    except Exception as e:
-        print(f"    ✗ Download failed: {e}")
-        return existing_count
-
-    # ── Open tar ──────────────────────────────────────────────
-    try:
-        tf = tarfile.open(fileobj=io.BytesIO(content))
-    except Exception as e:
-        print(f"    ✗ Cannot open tar: {e}")
-        return existing_count
-
-    all_members = tf.getmembers()
-    pdf_members = [m for m in all_members if m.name.lower().endswith(".pdf")]
-
-    print(f"    Files in tar: {len(all_members)} | PDFs: {len(pdf_members)}")
-
-    if not pdf_members:
-        extensions = set(os.path.splitext(m.name)[1] for m in all_members[:20])
-        print(f"    ✗ No PDFs found. Extensions in tar: {extensions}")
-        tf.close()
-        return existing_count
-
-    # ── Filter out already-saved files ───────────────────────
-    to_process = [
-        m for m in pdf_members
-        if os.path.basename(m.name) not in existing_filenames
-    ][:remaining]
-
-    print(
-        f"    Already saved: {existing_count} | To process: {len(to_process)}")
-
-    # ── Extract + save ────────────────────────────────────────
-    saved = existing_count
-
-    for i, member in enumerate(tqdm(to_process, desc=f"    Extracting {year}")):
-        fname_out = f"sc_{year}_{saved:04d}.json"
-        fpath_out = os.path.join(output_dir, fname_out)
-
-        try:
-            f = tf.extractfile(member)
-            if not f:
-                continue
-
-            pdf_bytes = f.read()
-            text = pdf_bytes_to_text(pdf_bytes)
-
-            if len(text) < 200:
-                continue
-
-            base_name = os.path.basename(member.name)
-            meta = meta_lookup.get(base_name, {})
-
-            data = {
-                "title":    meta.get("title") or meta.get("case_title") or base_name,
-                "year":     year,
-                "date":     meta.get("date") or meta.get("decision_date") or str(year),
-                "text":     text,
-                "court":    "Supreme Court of India",
-                "source":   "aws-open-data/indian-supreme-court-judgments",
-                "doc_type": "judgment",
-                "filename": base_name,
-                "metadata": meta
-            }
-
-            with open(fpath_out, "w", encoding="utf-8") as out:
-                json.dump(data, out, ensure_ascii=False, indent=2)
-
-            saved += 1
-
-        except Exception:
-            continue
-
-    tf.close()
-    return saved
+    return len(_year_files(year, output_dir))
 
 
 def scrape_commonlii(
     courts: list = None,
     years: list = None,
     output_dir: str = "data/raw/judgments",
-    max_per_court_year: int = 100
+    max_per_court_year: Optional[int] = 100,
+    workers: int = 4,
 ) -> list:
-    """Main entry point. courts param ignored — SC only dataset."""
+    """Main entry point. `courts` is ignored — this dataset is Supreme Court only.
 
+    max_per_court_year=None downloads every judgment for each year.
+    """
     if years is None:
         years = list(range(2018, 2025))
 
     os.makedirs(output_dir, exist_ok=True)
     total = 0
+    cap = "all" if max_per_court_year is None else max_per_court_year
 
     print(f"\n{'='*55}")
     print("AWS Open Data: Indian Supreme Court Judgments")
     print("License: CC BY 4.0  |  Coverage: 1950-2025")
-    print(f"Years: {years}  |  Max per year: {max_per_court_year}")
+    print(f"Years: {years[0]}–{years[-1]} ({len(years)})  |  Max per year: {cap}  |  Workers: {workers}")
     print(f"{'='*55}")
 
     for year in years:
         print(f"\n── Year {year} ──")
-        count = download_year(year, output_dir, max_per_court_year)
+        count = download_year(year, output_dir, max_per_court_year, workers)
         total += count
         print(f"✓ {count} judgments for {year}")
         time.sleep(1)
@@ -249,5 +182,26 @@ def scrape_commonlii(
     return []
 
 
+def parse_years(spec: str) -> list:
+    """'2018-2024' -> [2018..2024]; '2019,2021' -> [2019, 2021]."""
+    years: list = []
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            a, b = part.split("-", 1)
+            years.extend(range(int(a), int(b) + 1))
+        elif part:
+            years.append(int(part))
+    return sorted(set(years))
+
+
 if __name__ == "__main__":
-    scrape_commonlii(years=[2022, 2023, 2024], max_per_court_year=50)
+    ap = argparse.ArgumentParser(description="Download Supreme Court judgments (AWS Open Data)")
+    ap.add_argument("--years", default="2022-2024", help="e.g. 2018-2024 or 1950-2025")
+    ap.add_argument("--max-per-year", type=int, default=50,
+                    help="cap per year; 0 = no cap (everything)")
+    ap.add_argument("--workers", type=int, default=4, help="PDF extraction processes")
+    ap.add_argument("--out", default="data/raw/judgments")
+    a = ap.parse_args()
+    scrape_commonlii(years=parse_years(a.years), output_dir=a.out,
+                     max_per_court_year=(a.max_per_year or None), workers=a.workers)

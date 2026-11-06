@@ -1,0 +1,9 @@
+# Slim runtime dependencies for the deployed API (no scrapers, no CUDA).
+fastapi==0.111.0
+uvicorn==0.30.0
+qdrant-client==1.9.0
+sentence-transformers==3.0.0
+openai==1.30.0
+python-dotenv==1.0.0
+requests==2.32.0
+pydantic==2.7.0
