@@ -1,0 +1,21 @@
+# Render Blueprint. Point QDRANT_URL at Qdrant Cloud (free tier works) and
+# ingest your data into it first (see README "Deployment").
+services:
+  - type: web
+    name: nyayaai-api
+    runtime: docker
+    plan: standard          # the embedding model needs ~1 GB RAM
+    healthCheckPath: /health
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: COHERE_API_KEY
+        sync: false
+      - key: RERANKER
+        value: auto
+      - key: CORS_ORIGINS
+        value: "*"

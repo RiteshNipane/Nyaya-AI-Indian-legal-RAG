@@ -5,6 +5,7 @@ judis_scraper.py has been removed — commonLIT handles SC judgments directly.
 """
 
 from scraper.commonLIT_scraper import scrape_commonlii
+from scraper.highcourt_scraper import scrape_high_courts
 from scraper.Legislative_scraper import download_all_acts
 from scraper.Devgan_scraper import scrape_devgan_act
 from scraper.CAD_scaper import scrape_cad
@@ -74,5 +75,19 @@ def run_full_scrape():
     scrape_cad()
 
 
+def run_scale_scrape():
+    """
+    Scale-up scrape: every SC judgment 1950-2025 (50,000+) plus High Courts.
+    Downloads are resumable. Expect many GB and several hours; ingest with
+    QDRANT_ON_DISK=1 QDRANT_QUANTIZE=1 (see README "Scaling").
+    """
+    scrape_commonlii(years=list(range(1950, 2026)),
+                     max_per_court_year=None, workers=4)
+    scrape_high_courts(years=list(range(2018, 2026)),
+                       max_per_court_year=None, workers=4)
+
+
 if __name__ == "__main__":
-    run_mvp_scrape()
+    import sys
+    mode = sys.argv[1] if len(sys.argv) > 1 else "mvp"
+    {"mvp": run_mvp_scrape, "full": run_full_scrape, "scale": run_scale_scrape}[mode]()

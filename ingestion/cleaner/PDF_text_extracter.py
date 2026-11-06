@@ -8,7 +8,7 @@ def extract_text_from_pdf(pdf_path: str, is_constitution: bool = False) -> str:
     """Extract text from a PDF, applying special cropping for the Constitution."""
     text_pages = []
 
-    with pdfplumber.open(r"C:\Users\nipan\Indian-legal-RAG\data\raw\acts\constitution_of_india.pdf") as pdf:
+    with pdfplumber.open(pdf_path) as pdf:
         print(f"  Pages: {len(pdf.pages)}")
 
         for page_num, page in enumerate(pdf.pages):

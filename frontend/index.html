@@ -843,7 +843,9 @@
 
     <script>
         // FIXED CORS URL
-        const API = 'http://127.0.0.1:8000';
+        // API base: ?api=https://host in the URL, window.NYAYA_API_URL, or local default
+        const API = (new URLSearchParams(location.search).get('api')
+            || window.NYAYA_API_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
         let activeFilter = '';
         let chatHistory = [];
         let isLoading = false;
@@ -1027,7 +1029,10 @@
     </div>`).join('');
 
             // SAFE MODEL NAME FALLBACK ADDED HERE
-            const modelName = data.model_used ? (data.model_used.includes('/') ? data.model_used.split('/')[1] : data.model_used) : 'AI';
+            let modelName = data.model_used ? (data.model_used.includes('/') ? data.model_used.split('/')[1] : data.model_used) : 'AI';
+            if (data.query_type) modelName += ' · ' + data.query_type;
+            if (data.reranker) modelName += ' · rerank:' + data.reranker;
+            if (data.language && data.language !== 'en') modelName += ' · ' + data.language;
 
             el.innerHTML = `
     <div class="msg-header">

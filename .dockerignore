@@ -1,0 +1,9 @@
+.git
+.github
+data
+qdrant_storage
+tests
+evaluation/results
+**/__pycache__
+.env
+.pytest_cache

@@ -2,58 +2,62 @@
 api/main.py
 
 FastAPI backend for Indian Legal RAG.
-Query → Retrieve from Qdrant → Generate answer via OpenRouter → Return structured response.
+
+Query → (translate) → classify/route → dense retrieve → rerank → generate → respond.
 """
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
-from qdrant_client import QdrantClient
-from qdrant_client.models import Filter, FieldCondition, MatchValue
-from openai import OpenAI
-import torch
 import os
-from dotenv import load_dotenv
+import sys
 from typing import Optional
 
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+
 load_dotenv()
+
+from retrieval.adapters import build_pipeline_from_env  # noqa: E402
+from retrieval.generation import GenerationError, generate_answer  # noqa: E402
+from retrieval.query_classifier import QueryClassifier  # noqa: E402
+from retrieval.types import format_source_label  # noqa: E402
 
 # ─────────────────────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────────────────────
 
-QDRANT_URL = os.getenv("QDRANT_URL", "http://localhost:6333")
-COLLECTION_NAME = "indian_legal_rag"
-TOP_K = 8
+TOP_K = int(os.getenv("TOP_K", "8"))
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "anthropic/claude-3.5-sonnet")
+DOC_TYPES = {"act", "constitution", "judgment", "cad"}
 
 # ─────────────────────────────────────────────────────────
-# CLIENTS
+# CLIENTS  (embedder, Qdrant, reranker, translator, LLM)
 # ─────────────────────────────────────────────────────────
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"Loading embedding model on {DEVICE.upper()}...")
-embed_model = SentenceTransformer(
-    "sentence-transformers/all-MiniLM-L6-v2",
-    device=DEVICE
-)
-print("✓ Embedding model loaded")
+print("Initialising retrieval pipeline...")
+pipeline, store, embedder, llm_client = build_pipeline_from_env()
+print(f"✓ Embedding model loaded on {embedder.device.upper()}")
+print(f"✓ Reranker: {pipeline.reranker.name if pipeline.reranker else 'disabled'}")
 
-qdrant = QdrantClient(url=QDRANT_URL)
+_collection_dim = store.vector_size()
+if _collection_dim and _collection_dim != embedder.dimension:
+    print(
+        f"⚠ Embedding dimension ({embedder.dimension}) does not match the Qdrant "
+        f"collection ({_collection_dim}). Re-ingest or fix EMBEDDING_MODEL."
+    )
 
-# Correctly configured for OpenRouter
-llm_client = OpenAI(
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    base_url="https://openrouter.ai/api/v1",
-    timeout=60.0
-)
+app = FastAPI(title="Indian Legal RAG API", version="2.0")
 
-app = FastAPI(title="Indian Legal RAG API", version="1.0")
-
+_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_origins,
+    # credentials are not used; wildcard origins and credentials cannot be combined
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -65,9 +69,12 @@ app.add_middleware(
 
 class QueryRequest(BaseModel):
     query: str
-    top_k: int = TOP_K
+    top_k: int = Field(default=TOP_K, ge=1, le=30)
     doc_type: Optional[str] = None
-    model: str = "anthropic/claude-3.5-sonnet"  # Valid OpenRouter Default
+    model: str = DEFAULT_MODEL
+    rerank: bool = True      # second-stage reranking
+    route: bool = True       # automatic act/judgment/CAD routing
+    language: Optional[str] = None   # ISO code (hi, mr, ta, ...); auto-detected if omitted
 
 
 class SourceDoc(BaseModel):
@@ -75,7 +82,9 @@ class SourceDoc(BaseModel):
     text_snippet: str
     title: str = ""
     source: str = ""
-    score: float = 0.0
+    score: float = 0.0                    # final score (reranker score when reranked)
+    dense_score: float = 0.0
+    rerank_score: Optional[float] = None
 
 
 class QueryResponse(BaseModel):
@@ -83,134 +92,14 @@ class QueryResponse(BaseModel):
     sources: list[SourceDoc]
     query: str
     model_used: str
+    language: str = "en"
+    retrieval_query: str = ""
+    query_type: str = "general"
+    routed_doc_types: Optional[list[str]] = None
+    widened: bool = False
+    reranker: Optional[str] = None
+    timings_ms: dict = {}
 
-# ─────────────────────────────────────────────────────────
-# RETRIEVAL
-# ─────────────────────────────────────────────────────────
-
-
-def retrieve(query: str, top_k: int = TOP_K, doc_type: str = None) -> list:
-    """Embed query and retrieve top_k chunks from Qdrant."""
-
-    query_vector = embed_model.encode(
-        [query],
-        normalize_embeddings=True,
-        device=DEVICE
-    )[0].tolist()
-
-    query_filter = None
-    if doc_type:
-        query_filter = Filter(
-            must=[FieldCondition(
-                key="doc_type",
-                match=MatchValue(value=doc_type)
-            )]
-        )
-
-    results = qdrant.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        query_filter=query_filter,
-        limit=top_k,
-        with_payload=True
-    ).points
-
-    return results
-
-
-def format_source_label(payload: dict) -> str:
-    """Build a readable source label from chunk metadata."""
-    doc_type = payload.get("doc_type", "")
-
-    if doc_type == "judgment":
-        title = payload.get("title", "Unknown Case")
-        year = payload.get("year", "")
-        court = payload.get("court", "Supreme Court of India")
-        return f"{title} ({year}) — {court}"
-
-    elif doc_type == "act":
-        act_name = payload.get("act_name") or payload.get("act", "").upper()
-        section = payload.get("section_number", "")
-        title = payload.get("section_title", "")
-        return f"{act_name}, Section {section} — {title}"
-
-    elif doc_type == "cad":
-        volume = payload.get("volume", "")
-        date = payload.get("date", "")
-        speaker = payload.get("speaker", "")
-        return f"CAD Vol.{volume} ({date}) — {speaker}"
-
-    return payload.get("source", "Legal Source")
-
-# ─────────────────────────────────────────────────────────
-# GENERATION
-# ─────────────────────────────────────────────────────────
-
-
-SYSTEM_PROMPT = """You are an expert Indian constitutional lawyer and legal researcher.
-
-You help lawyers, students, and citizens understand Indian law by providing:
-1. Relevant constitutional articles and their interpretation
-2. Landmark Supreme Court and High Court judgments
-3. The legal reasoning behind key principles
-4. Framer intent from Constituent Assembly Debates when relevant
-
-STRICT RULES:
-- ONLY use information from the provided context documents
-- If context is insufficient, say so clearly — never hallucinate cases or articles
-- Always cite: case name + year + court for every judgment
-- Always cite: Article number for every constitutional provision
-- Distinguish binding precedent (SC) from persuasive authority (HC)
-- Never give direct legal advice — provide legal information only
-
-OUTPUT FORMAT:
-1. **Relevant Constitutional Provisions** — Articles that apply
-2. **Key Judgments** — Case, year, court, and what was held
-3. **Legal Reasoning** — The principle flowing from these sources
-4. **Framer Intent** (if available from CAD) — Original intent
-5. **Caveats** — Limitations or conflicting views
-"""
-
-
-def build_prompt(query: str, results: list) -> str:
-    context_parts = []
-    for i, result in enumerate(results, 1):
-        payload = result.payload
-        label = format_source_label(payload)
-        text = payload.get("text", "")
-        context_parts.append(f"[Source {i}: {label}]\n{text}")
-
-    context = "\n\n---\n\n".join(context_parts)
-
-    return f"""Answer this legal query using ONLY the sources provided below.
-
-QUERY: {query}
-
-LEGAL SOURCES:
-{context}
-
-Provide a structured answer. Cite sources as [Source N]."""
-
-
-def generate_answer(query: str, results: list, model: str) -> str:
-    prompt = build_prompt(query, results)
-
-    try:
-        response = llm_client.chat.completions.create(
-            model=model,
-            max_tokens=2000,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": prompt}
-            ]
-        )
-        return response.choices[0].message.content
-
-    except Exception as e:
-        # This prevents silent crashes and prints the exact OpenRouter error to your terminal
-        print(f"\n❌ OPENROUTER API ERROR: {e}\n")
-        raise HTTPException(
-            status_code=502, detail=f"LLM Generation failed: {str(e)}")
 
 # ─────────────────────────────────────────────────────────
 # ROUTES
@@ -225,68 +114,97 @@ def root():
 @app.get("/health")
 def health():
     try:
-        count = qdrant.count(COLLECTION_NAME).count
         return {
-            "status":  "ok",
-            "qdrant":  "connected",
-            "vectors": count,
-            "device":  DEVICE
+            "status": "ok",
+            "qdrant": "connected",
+            "vectors": store.count(),
+            "device": embedder.device,
+            "reranker": pipeline.reranker.name if pipeline.reranker else None,
+            "translation": pipeline.translator is not None,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/classify")
+def classify(q: str = Query(..., min_length=1)):
+    """Debug endpoint: show how a query would be routed."""
+    return QueryClassifier().classify(q).to_dict()
 
 
 @app.post("/query", response_model=QueryResponse)
 def query_rag(request: QueryRequest):
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
-
-    # Retrieve
-    results = retrieve(
-        query=request.query,
-        top_k=request.top_k,
-        doc_type=request.doc_type
-    )
-
-    if not results:
+    if request.doc_type and request.doc_type not in DOC_TYPES:
         raise HTTPException(
-            status_code=404, detail="No relevant documents found")
+            status_code=400,
+            detail=f"doc_type must be one of {sorted(DOC_TYPES)}")
 
-    # Generate
-    answer = generate_answer(request.query, results, request.model)
+    try:
+        result = pipeline.retrieve(
+            query=request.query,
+            top_k=request.top_k,
+            doc_type=request.doc_type,
+            rerank=request.rerank,
+            route=request.route,
+            language=request.language,
+        )
+    except Exception as e:
+        print(f"\n❌ RETRIEVAL ERROR: {e}\n")
+        raise HTTPException(status_code=503, detail=f"Retrieval failed: {e}")
 
-    # Format sources
+    if not result.candidates:
+        raise HTTPException(status_code=404, detail="No relevant documents found")
+
+    try:
+        answer = generate_answer(
+            llm_client, request.model, request.query,
+            result.candidates, result.language)
+    except GenerationError as e:
+        print(f"\n❌ OPENROUTER API ERROR: {e}\n")
+        raise HTTPException(status_code=502, detail=f"LLM Generation failed: {e}")
+
     sources = [
         SourceDoc(
-            doc_type=r.payload.get("doc_type", ""),
-            text_snippet=r.payload.get("text", "")[:200] + "...",
-            title=format_source_label(r.payload),
-            source=r.payload.get("source", ""),
-            score=round(r.score, 4)
+            doc_type=c.payload.get("doc_type", ""),
+            text_snippet=c.text[:200] + "...",
+            title=format_source_label(c.payload),
+            source=c.payload.get("source", ""),
+            score=round(c.final_score, 4),
+            dense_score=round(c.score, 4),
+            rerank_score=None if c.rerank_score is None else round(c.rerank_score, 4),
         )
-        for r in results
+        for c in result.candidates
     ]
 
     return QueryResponse(
         answer=answer,
         sources=sources,
         query=request.query,
-        model_used=request.model
+        model_used=request.model,
+        language=result.language.code,
+        retrieval_query=result.retrieval_query,
+        query_type=result.classification.query_type if result.classification else "general",
+        routed_doc_types=result.routed_doc_types,
+        widened=result.widened,
+        reranker=result.reranker,
+        timings_ms=result.timings_ms,
     )
 
 
 @app.get("/collections")
 def collection_info():
     try:
-        info = qdrant.get_collection(COLLECTION_NAME)
-        count = qdrant.count(COLLECTION_NAME).count
+        info = store.client.get_collection(store.collection)
         return {
-            "name":    COLLECTION_NAME,
-            "vectors": count,
-            "status":  str(info.status)
+            "name": store.collection,
+            "vectors": store.count(),
+            "status": str(info.status),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 # ─────────────────────────────────────────────────────────
 # RUN
@@ -295,4 +213,9 @@ def collection_info():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        reload=os.getenv("RELOAD", "1") == "1",
+    )

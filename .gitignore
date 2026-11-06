@@ -42,3 +42,8 @@ embeddings/ingest_progress.json
 # OS
 .DS_Store
 Thumbs.db
+# Evaluation reports
+evaluation/results/
+
+# Scraped judgments manifests
+data/
